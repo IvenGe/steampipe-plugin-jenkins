@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin"
@@ -58,13 +57,16 @@ func listJenkinsNodes(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydrat
 	nodes, err := client.GetAllNodes(ctx)
 	if err != nil {
 		logger.Error("jenkins_node.listJenkinsNodes", "query_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
 	for _, node := range nodes {
+		if node == nil || node.Raw == nil {
+			continue
+		}
 		d.StreamListItem(ctx, node.Raw)
 
 		// Context can be cancelled due to manual cancellation or the limit has been hit
@@ -73,7 +75,7 @@ func listJenkinsNodes(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydrat
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }
 
 //// HYDRATE FUNCTION
@@ -98,6 +100,10 @@ func getJenkinsNode(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateD
 	if err != nil {
 		logger.Error("jenkins_node.getJenkinsNode", "query_error", err)
 		return nil, err
+	}
+
+	if node == nil || node.Raw == nil {
+		return nil, nil
 	}
 
 	return node.Raw, nil

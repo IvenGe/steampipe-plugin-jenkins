@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/IvenGe/gojenkins"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -21,7 +20,7 @@ func tableJenkinsFolder() *plugin.Table {
 			Hydrate:    getJenkinsFolder,
 			KeyColumns: plugin.SingleColumn("full_name"),
 			IgnoreConfig: &plugin.IgnoreConfig{
-				ShouldIgnoreErrorFunc: isNotFoundError([]string{"404"}),
+				ShouldIgnoreErrorFunc: isNotFoundError(nil),
 			},
 		},
 		List: &plugin.ListConfig{
@@ -46,28 +45,33 @@ func tableJenkinsFolder() *plugin.Table {
 //// Handle Jenkins root level as a folder
 
 func handleRootFolder(client *gojenkins.Jenkins) gojenkins.Job {
-	rootFolder := gojenkins.Job{
+	raw := &gojenkins.JobResponse{
+		Description:     "Jenkins root",
+		DisplayName:     "Root",
+		FullDisplayName: "Root",
+		FullName:        "/",
+		Name:            "/",
+		URL:             client.Server + "/",
+	}
+	if client.Raw != nil {
+		raw.Jobs = client.Raw.Jobs
+		raw.PrimaryView = (*gojenkins.ViewData)(&client.Raw.PrimaryView)
+		raw.Views = client.Raw.Views
+	}
+	return gojenkins.Job{
 		Jenkins: client,
 		Base:    "/",
-		Raw: &gojenkins.JobResponse{
-			Description:     "Jenkins root",
-			DisplayName:     "Root",
-			FullDisplayName: "Root",
-			FullName:        "/",
-			Jobs:            client.Raw.Jobs,
-			Name:            "/",
-			PrimaryView:     (*gojenkins.ViewData)(&client.Raw.PrimaryView),
-			URL:             client.Server + "/",
-			Views:           client.Raw.Views,
-		},
+		Raw:     raw,
 	}
-	return rootFolder
 }
 
 //// Recursively find sub folders
 
-func handleFolders(folders []*gojenkins.Job, ctx context.Context, d *plugin.QueryData) {
+func handleFolders(folders []*gojenkins.Job, ctx context.Context, d *plugin.QueryData) error {
 	for _, folder := range folders {
+		if folder == nil || folder.Raw == nil {
+			continue
+		}
 		// Filter to Folder job type only
 		if folder.Raw.Class != "com.cloudbees.hudson.plugins.folder.Folder" {
 			continue
@@ -76,12 +80,21 @@ func handleFolders(folders []*gojenkins.Job, ctx context.Context, d *plugin.Quer
 
 		// Context can be cancelled due to manual cancellation or the limit has been hit
 		if d.RowsRemaining(ctx) == 0 {
-			return
+			return nil
 		}
 
-		child_jobs, _ := folder.GetInnerJobs(ctx)
-		handleFolders(child_jobs, ctx, d)
+		childJobs, err := folder.GetInnerJobs(ctx)
+		if err != nil {
+			if isNotFoundErr(err) {
+				continue
+			}
+			return err
+		}
+		if err := handleFolders(childJobs, ctx, d); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 //// LIST FUNCTION
@@ -97,18 +110,25 @@ func listJenkinsFolders(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydr
 	rootFolder := handleRootFolder(client)
 	d.StreamListItem(ctx, &rootFolder)
 
+	if d.RowsRemaining(ctx) == 0 {
+		return nil, nil
+	}
+
 	folders, err := client.GetAllJobs(ctx)
 	if err != nil {
 		logger.Error("jenkins_folder.listJenkinsFolders", "list_folders_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	handleFolders(folders, ctx, d)
+	if err := handleFolders(folders, ctx, d); err != nil {
+		logger.Error("jenkins_folder.listJenkinsFolders", "list_child_folders_error", err)
+		return nil, err
+	}
 
-	return nil, err
+	return nil, nil
 }
 
 //// HYDRATE FUNCTION
@@ -134,14 +154,16 @@ func getJenkinsFolder(ctx context.Context, d *plugin.QueryData, h *plugin.Hydrat
 		return &rootFolder, nil
 	}
 
-	folderFullNameList := strings.Split(folderFullName, "/")
-	folderParentNames := folderFullNameList[0 : len(folderFullNameList)-1]
-	folderName := folderFullNameList[len(folderFullNameList)-1]
+	folderName, folderParentNames := splitFullName(folderFullName)
 
 	folder, err := client.GetJob(ctx, folderName, folderParentNames...)
 	if err != nil {
 		logger.Error("jenkins_folder.getJenkinsFolder", "query_error", err)
 		return nil, err
+	}
+
+	if folder == nil || folder.Raw == nil {
+		return nil, nil
 	}
 
 	// Filter to Folder job type only

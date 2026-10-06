@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/IvenGe/gojenkins"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -21,7 +20,7 @@ func tableJenkinsFreestyleProject() *plugin.Table {
 			Hydrate:    getJenkinsFreestyleProject,
 			KeyColumns: plugin.SingleColumn("full_name"),
 			IgnoreConfig: &plugin.IgnoreConfig{
-				ShouldIgnoreErrorFunc: isNotFoundError([]string{"404"}),
+				ShouldIgnoreErrorFunc: isNotFoundError(nil),
 			},
 		},
 		List: &plugin.ListConfig{
@@ -67,18 +66,24 @@ func tableJenkinsFreestyleProject() *plugin.Table {
 func listJenkinsFreestyleProjects(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateData) (interface{}, error) {
 	logger := plugin.Logger(ctx)
 
-	folder := h.Item.(*gojenkins.Job)
+	folder, ok := h.Item.(*gojenkins.Job)
+	if !ok || folder == nil {
+		return nil, nil
+	}
 
 	freestyles, err := folder.GetInnerJobs(ctx)
 	if err != nil {
 		logger.Error("jenkins_freestyle_project.listJenkinsFreestyleProjects", "query_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
 	for _, freestyle := range freestyles {
+		if freestyle == nil || freestyle.Raw == nil {
+			continue
+		}
 		// Filter to FreestyleProject job type only
 		if freestyle.Raw.Class != "hudson.model.FreeStyleProject" {
 			continue
@@ -91,7 +96,7 @@ func listJenkinsFreestyleProjects(ctx context.Context, d *plugin.QueryData, h *p
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }
 
 //// HYDRATE FUNCTION
@@ -112,14 +117,16 @@ func getJenkinsFreestyleProject(ctx context.Context, d *plugin.QueryData, h *plu
 		return nil, err
 	}
 
-	freestyleFullNameList := strings.Split(freestyleFullName, "/")
-	freestyleParentNames := freestyleFullNameList[0 : len(freestyleFullNameList)-1]
-	freestyleName := freestyleFullNameList[len(freestyleFullNameList)-1]
+	freestyleName, freestyleParentNames := splitFullName(freestyleFullName)
 
 	freestyle, err := client.GetJob(ctx, freestyleName, freestyleParentNames...)
 	if err != nil {
 		logger.Error("jenkins_freestyle_project.getJenkinsFreestyleProject", "query_error", err)
 		return nil, err
+	}
+
+	if freestyle == nil || freestyle.Raw == nil {
+		return nil, nil
 	}
 
 	// Filter to FreestyleProject job type only

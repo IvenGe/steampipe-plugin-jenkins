@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/IvenGe/gojenkins"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -21,7 +20,7 @@ func tableJenkinsPipeline() *plugin.Table {
 			Hydrate:    getJenkinsPipeline,
 			KeyColumns: plugin.SingleColumn("full_name"),
 			IgnoreConfig: &plugin.IgnoreConfig{
-				ShouldIgnoreErrorFunc: isNotFoundError([]string{"404"}),
+				ShouldIgnoreErrorFunc: isNotFoundError(nil),
 			},
 		},
 		List: &plugin.ListConfig{
@@ -64,18 +63,24 @@ func tableJenkinsPipeline() *plugin.Table {
 func listJenkinsPipelines(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateData) (interface{}, error) {
 	logger := plugin.Logger(ctx)
 
-	folder := h.Item.(*gojenkins.Job)
+	folder, ok := h.Item.(*gojenkins.Job)
+	if !ok || folder == nil {
+		return nil, nil
+	}
 
 	pipelines, err := folder.GetInnerJobs(ctx)
 	if err != nil {
 		logger.Error("jenkins_pipeline.listJenkinsPipelines", "list_pipelines_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
 	for _, pipeline := range pipelines {
+		if pipeline == nil || pipeline.Raw == nil {
+			continue
+		}
 		// Filter to Pipeline job type only
 		if pipeline.Raw.Class != "org.jenkinsci.plugins.workflow.job.WorkflowJob" {
 			continue
@@ -88,7 +93,7 @@ func listJenkinsPipelines(ctx context.Context, d *plugin.QueryData, h *plugin.Hy
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }
 
 //// HYDRATE FUNCTION
@@ -109,14 +114,16 @@ func getJenkinsPipeline(ctx context.Context, d *plugin.QueryData, h *plugin.Hydr
 		return nil, err
 	}
 
-	pipelineFullNameList := strings.Split(pipelineFullName, "/")
-	pipelineParentNames := pipelineFullNameList[0 : len(pipelineFullNameList)-1]
-	pipelineName := pipelineFullNameList[len(pipelineFullNameList)-1]
+	pipelineName, pipelineParentNames := splitFullName(pipelineFullName)
 
 	pipeline, err := client.GetJob(ctx, pipelineName, pipelineParentNames...)
 	if err != nil {
 		logger.Error("jenkins_pipeline.getJenkinsPipeline", "query_error", err)
 		return nil, err
+	}
+
+	if pipeline == nil || pipeline.Raw == nil {
+		return nil, nil
 	}
 
 	// Filter to Pipeline job type only
