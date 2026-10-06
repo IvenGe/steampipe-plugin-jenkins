@@ -3,7 +3,7 @@ module github.com/turbot/steampipe-plugin-jenkins
 go 1.19
 
 require (
-	github.com/IvenGe/gojenkins v1.1.5
+	github.com/IvenGe/gojenkins v1.1.6
 	github.com/stretchr/testify v1.8.4
 	github.com/turbot/steampipe-plugin-sdk/v5 v5.5.0
 )
