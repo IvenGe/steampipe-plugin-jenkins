@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin/transform"
@@ -53,14 +52,18 @@ func listJenkinsPlugins(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydr
 	plugins, err := client.GetPlugins(ctx, 10)
 	if err != nil {
 		logger.Error("jenkins_plugin.listJenkinsPlugins", "query_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	for _, plugin := range plugins.Raw.Plugins {
-		d.StreamListItem(ctx, plugin)
+	if plugins == nil || plugins.Raw == nil {
+		return nil, nil
+	}
+
+	for _, p := range plugins.Raw.Plugins {
+		d.StreamListItem(ctx, p)
 
 		// Context can be cancelled due to manual cancellation or the limit has been hit
 		if d.RowsRemaining(ctx) == 0 {
@@ -68,5 +71,5 @@ func listJenkinsPlugins(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydr
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }

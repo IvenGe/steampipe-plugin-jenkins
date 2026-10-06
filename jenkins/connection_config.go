@@ -27,11 +27,18 @@ func ConfigInstance() interface{} {
 	return &jenkinsConfig{}
 }
 
-// GetConfig :: retrieve and cast connection config from query data
+// GetConfig retrieves and casts connection config from query data.
 func GetConfig(connection *plugin.Connection) jenkinsConfig {
 	if connection == nil || connection.Config == nil {
 		return jenkinsConfig{}
 	}
-	config, _ := connection.Config.(jenkinsConfig)
-	return config
+	switch config := connection.Config.(type) {
+	case jenkinsConfig:
+		return config
+	case *jenkinsConfig:
+		if config != nil {
+			return *config
+		}
+	}
+	return jenkinsConfig{}
 }

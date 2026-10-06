@@ -3,7 +3,10 @@ package jenkins
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/IvenGe/gojenkins"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin"
@@ -22,12 +25,12 @@ var connectCached = plugin.HydrateFunc(connectUncached).Memoize()
 func connectUncached(ctx context.Context, d *plugin.QueryData, _ *plugin.HydrateData) (any, error) {
 	jenkinsConfig := GetConfig(d.Connection)
 
-	var server_url, username, password string
+	var serverURL, username, password string
 
 	if jenkinsConfig.ServerURL != nil {
-		server_url = *jenkinsConfig.ServerURL
+		serverURL = *jenkinsConfig.ServerURL
 	} else {
-		server_url = os.Getenv("JENKINS_URL")
+		serverURL = os.Getenv("JENKINS_URL")
 	}
 
 	if jenkinsConfig.Username != nil {
@@ -43,9 +46,23 @@ func connectUncached(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydrate
 	}
 
 	// Error if the minimum config is not set
-	if server_url == "" || username == "" || password == "" {
+	if serverURL == "" || username == "" || password == "" {
 		return nil, errors.New("'server_url', 'username' and 'password' must be set in the connection configuration. Edit your connection configuration file and then restart Steampipe.")
 	}
 
-	return gojenkins.CreateJenkins(nil, server_url, username, password).Init(ctx)
+	httpClient := &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+
+	return gojenkins.CreateJenkins(httpClient, serverURL, username, password).Init(ctx)
 }

@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"strings"
 
 	"github.com/IvenGe/gojenkins"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -21,7 +20,7 @@ func tableJenkinsJob() *plugin.Table {
 			Hydrate:    getJenkinsJob,
 			KeyColumns: plugin.SingleColumn("full_name"),
 			IgnoreConfig: &plugin.IgnoreConfig{
-				ShouldIgnoreErrorFunc: isNotFoundError([]string{"404"}),
+				ShouldIgnoreErrorFunc: isNotFoundError(nil),
 			},
 		},
 		List: &plugin.ListConfig{
@@ -46,18 +45,24 @@ func tableJenkinsJob() *plugin.Table {
 func listJenkinsJobs(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateData) (interface{}, error) {
 	logger := plugin.Logger(ctx)
 
-	folder := h.Item.(*gojenkins.Job)
+	folder, ok := h.Item.(*gojenkins.Job)
+	if !ok || folder == nil {
+		return nil, nil
+	}
 
 	jobs, err := folder.GetInnerJobs(ctx)
 	if err != nil {
 		logger.Error("jenkins_job.listJenkinsJobs", "query_error", err)
-		if strings.Contains(err.Error(), "Not found") {
+		if isNotFoundErr(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
 	for _, job := range jobs {
+		if job == nil || job.Raw == nil {
+			continue
+		}
 		d.StreamListItem(ctx, job.Raw)
 
 		// Context can be cancelled due to manual cancellation or the limit has been hit
@@ -66,7 +71,7 @@ func listJenkinsJobs(ctx context.Context, d *plugin.QueryData, h *plugin.Hydrate
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }
 
 //// HYDRATE FUNCTION
@@ -87,14 +92,16 @@ func getJenkinsJob(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateDa
 		return nil, err
 	}
 
-	jobFullNameList := strings.Split(jobFullName, "/")
-	jobParentNames := jobFullNameList[0 : len(jobFullNameList)-1]
-	jobName := jobFullNameList[len(jobFullNameList)-1]
+	jobName, jobParentNames := splitFullName(jobFullName)
 
 	job, err := client.GetJob(ctx, jobName, jobParentNames...)
 	if err != nil {
 		logger.Error("jenkins_job.getJenkinsJob", "query_error", err)
 		return nil, err
+	}
+
+	if job == nil || job.Raw == nil {
+		return nil, nil
 	}
 
 	return job.Raw, nil
